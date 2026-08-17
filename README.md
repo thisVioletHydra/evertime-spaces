@@ -1,80 +1,55 @@
-# Evertime
+# Evertime Spaces
 
-Минимальные часы для macOS: время в правом верхнем углу, когда системные часы спрятаны (фуллскрин, автоскрытие менюбара). Когда менюбар снова виден — оверлей прячется, чтобы не дублировать системные часы.
+Часы для macOS на всех рабочих столах (Spaces): время в правом верхнем углу, когда системные часы спрятаны (фуллскрин, автоскрытие менюбара). Когда менюбар снова виден — оверлей прячется, чтобы не дублировать системные часы.
 
 ## Требования
 
-- macOS
+- macOS 13+
 - Python 3.10+
 
 ## Установка
 
 ```bash
-git clone git@github.com:thisVioletHydra/corner-timer.git
-cd corner-timer
+git clone git@github.com:thisVioletHydra/evertime-spaces.git
+cd evertime-spaces
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Запуск
+## Запуск из терминала
 
 ```bash
 ./run.sh
 ```
 
-Или напрямую:
+Или:
 
 ```bash
 .venv/bin/python evertime.py
 ```
 
-`Ctrl+C` в терминале останавливает процесс.
+`Ctrl+C` останавливает процесс.
 
-## Автозапуск (launchd)
+## Запуск как обычное приложение
 
-Чтобы крутилось в фоне без терминала:
-
-```bash
-cat > ~/Library/LaunchAgents/com.evertime.app.plist <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.evertime.app</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/ABSOLUTE/PATH/TO/corner-timer/.venv/bin/python</string>
-        <string>/ABSOLUTE/PATH/TO/corner-timer/evertime.py</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/ABSOLUTE/PATH/TO/corner-timer</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/evertime.err</string>
-</dict>
-</plist>
-EOF
-
-# подставь свой путь вместо /ABSOLUTE/PATH/TO/corner-timer
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.evertime.app.plist
+```text
+~/Applications/Evertime Spaces.app
 ```
 
-Остановить:
-
 ```bash
-launchctl bootout gui/$(id -u)/com.evertime.app
+open ~/Applications/Evertime\ Spaces.app
 ```
+
+Автозапуск: **Системные настройки → Основные → Объекты входа** → добавь **Evertime Spaces**.
+
+В Dock не светится (`LSUIElement`) — это фоновый оверлей.
+
+> `.app` запускает `.venv/bin/python evertime.py` из клона репо. Не переноси папку проекта без правки лаунчера внутри `.app`.
 
 ## Как это устроено
 
 - прозрачная `NSPanel` поверх окон и фуллскрин-спейсов
-- показ только когда виджеты системного менюбара (часы/Wi‑Fi и т.п.) не видны
+- показ только когда виджеты системного менюбара не видны
 - цвет текста — приглушённый серый
 
 ## Лицензия

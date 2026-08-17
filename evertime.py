@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evertime — часы в правом верхнем углу, когда системных часов не видно."""
+"""Evertime Spaces — часы на всех рабочих столах, когда системных часов не видно."""
 
 from __future__ import annotations
 
