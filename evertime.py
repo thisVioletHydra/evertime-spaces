@@ -19,6 +19,7 @@ from AppKit import (
     NSShadow,
     NSSize,
     NSTextField,
+    NSRightTextAlignment,
     NSWindowCollectionBehaviorCanJoinAllSpaces,
     NSWindowCollectionBehaviorFullScreenAuxiliary,
     NSWindowStyleMaskBorderless,
@@ -37,9 +38,9 @@ from Quartz import (
 
 OVERLAY_LEVEL = CGWindowLevelForKey(kCGPopUpMenuWindowLevelKey)
 
-MARGIN_RIGHT = 14.0
-# ниже полосы менюбара (33pt): окна целиком внутри неё macOS на фуллскрин-спейсах не рисует
-MARGIN_TOP = 36.0
+MENU_BAR_HEIGHT = 33.0
+INSET_RIGHT = 14.0
+INSET_TOP = 1.0
 FONT_SIZE = 13.0
 TIME_FMT = "%H:%M"
 TICK_S = 0.35
@@ -56,6 +57,24 @@ def format_time() -> str:
     from time import strftime
 
     return strftime(TIME_FMT)
+
+
+def clock_frame(label: NSTextField, screen=None) -> tuple[float, float, float, float]:
+    """Окно в полосе менюбара, текст справа — как системные часы."""
+    screen = screen or NSScreen.mainScreen()
+    frame = screen.frame()
+
+    label.sizeToFit()
+    label_w = float(label.frame().size.width)
+    label_h = float(label.frame().size.height)
+
+    w = label_w + 2
+    h = MENU_BAR_HEIGHT
+    x = float(frame.origin.x + frame.size.width - w - INSET_RIGHT)
+    y = float(frame.origin.y + frame.size.height - h + INSET_TOP)
+
+    label.setFrame_(NSMakeRect(0, (h - label_h) / 2, w, label_h))
+    return x, y, w, h
 
 
 def system_clock_visible() -> bool:
@@ -90,6 +109,7 @@ class ClockController(NSObject):
         label.setEditable_(False)
         label.setSelectable_(False)
         label.setFont_(NSFont.monospacedDigitSystemFontOfSize_weight_(FONT_SIZE, 0.0))
+        label.setAlignment_(NSRightTextAlignment)
         # ~40% темнее чистого белого
         label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.60, 1.0))
 
@@ -98,13 +118,8 @@ class ClockController(NSObject):
         shadow.setShadowOffset_(NSSize(width=0, height=-1))
         shadow.setShadowBlurRadius_(3.0)
         label.setShadow_(shadow)
-        label.sizeToFit()
 
-        w = label.frame().size.width + 16
-        h = label.frame().size.height + 4
-        frame = NSScreen.mainScreen().frame()
-        x = frame.origin.x + frame.size.width - w - MARGIN_RIGHT
-        y = frame.origin.y + frame.size.height - h - MARGIN_TOP
+        x, y, w, h = clock_frame(label)
 
         window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, w, h),
@@ -185,14 +200,10 @@ class ClockController(NSObject):
             return
 
         self.label.setStringValue_(format_time())
-        self.label.sizeToFit()
 
-        frame = NSScreen.mainScreen().frame()
-        w = self.label.frame().size.width + 16
-        h = self.label.frame().size.height + 4
-        snap_x = frame.origin.x + frame.size.width - w - MARGIN_RIGHT
-        snap_y = frame.origin.y + frame.size.height - h - MARGIN_TOP
-        self.window.setFrame_display_(NSMakeRect(snap_x, snap_y, w, h), True)
+        screen = NSScreen.mainScreen()
+        x, y, w, h = clock_frame(self.label, screen)
+        self.window.setFrame_display_(NSMakeRect(x, y, w, h), True)
 
         # macOS иногда сбрасывает level после смены Space — долбим заново
         self.window.setLevel_(OVERLAY_LEVEL)
