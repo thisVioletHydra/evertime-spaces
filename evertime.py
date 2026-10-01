@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import signal
 import sys
@@ -12,6 +13,10 @@ from AppKit import (
     NSApplicationActivationPolicyAccessory,
     NSBackingStoreBuffered,
     NSColor,
+    NSEvent,
+    NSEventMaskLeftMouseDragged,
+    NSEventMaskMouseMoved,
+    NSEventMaskRightMouseDragged,
     NSFont,
     NSMakeRect,
     NSPanel,
@@ -39,18 +44,24 @@ from Quartz import (
 OVERLAY_LEVEL = CGWindowLevelForKey(kCGPopUpMenuWindowLevelKey)
 
 MENU_BAR_HEIGHT = 33.0
-INSET_RIGHT = 14.0
+INSET_RIGHT = 20.0
 INSET_TOP = 1.0
 FONT_SIZE = 13.0
 TIME_FMT = "%H:%M"
-TICK_S = 0.35
+TICK_S = 0.1
+# кромка, с которой macOS начинает вывозить менюбар; уже самой полосы
+HOVER_EDGE = 8.0
 
-# виджеты менюбара (часы, Wi-Fi, батарея...): небольшие окна layer=25 у верха.
-# Окно "Menubar" в списке висит всегда, даже на фуллскрине, а виджеты — только
-# когда менюбар реально виден. Это и есть честный сигнал "системные часы на экране".
+# Старый сигнал: виджеты менюбара — небольшие окна layer=25 у верха.
+# Окно "Menubar" висит всегда, даже на фуллскрине, а виджеты — только когда
+# менюбар реально виден. На новых macOS часы рисует сам менюбар, отдельных
+# окон больше нет, поэтому рядом спрашиваем SkyLight про текущий спейс.
 STATUS_LAYER = 25
 STATUS_MAX_HEIGHT = 40.0
 STATUS_MAX_WIDTH = 400.0
+
+_sky = None
+_cf = None
 
 
 def format_time() -> str:
@@ -77,7 +88,30 @@ def clock_frame(label: NSTextField, screen=None) -> tuple[float, float, float, f
     return x, y, w, h
 
 
-def system_clock_visible() -> bool:
+def _sky_libs():
+    global _sky, _cf
+    if _sky is not None:
+        return _sky, _cf
+
+    sky = ctypes.CDLL("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
+    sky.SLSMainConnectionID.restype = ctypes.c_int
+    sky.SLSCopyActiveMenuBarDisplayIdentifier.argtypes = [ctypes.c_int]
+    sky.SLSCopyActiveMenuBarDisplayIdentifier.restype = ctypes.c_void_p
+    sky.SLSManagedDisplayGetCurrentSpace.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    sky.SLSManagedDisplayGetCurrentSpace.restype = ctypes.c_uint64
+    sky.SLSIsMenuBarVisibleOnSpace.argtypes = [ctypes.c_int, ctypes.c_uint64]
+    sky.SLSIsMenuBarVisibleOnSpace.restype = ctypes.c_int
+
+    cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    cf.CFRelease.restype = None
+
+    _sky = sky
+    _cf = cf
+    return sky, cf
+
+
+def _status_widgets_visible() -> bool:
     infos = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
     for info in infos or []:
         if int(info.get("kCGWindowLayer", -1)) != STATUS_LAYER:
@@ -97,9 +131,52 @@ def system_clock_visible() -> bool:
     return False
 
 
+def _menu_bar_visible() -> bool | None:
+    """Менюбар на текущем спейсе. None — приватного API нет."""
+    try:
+        sky, cf = _sky_libs()
+        cid = sky.SLSMainConnectionID()
+        display = sky.SLSCopyActiveMenuBarDisplayIdentifier(cid)
+        if not display:
+            return None
+        try:
+            space = sky.SLSManagedDisplayGetCurrentSpace(cid, display)
+        finally:
+            cf.CFRelease(display)
+        if not space:
+            return None
+        return bool(sky.SLSIsMenuBarVisibleOnSpace(cid, space))
+    except (AttributeError, OSError):
+        return None
+
+
+def system_clock_visible() -> bool:
+    if _status_widgets_visible():
+        return True
+    return bool(_menu_bar_visible())
+
+
+def pointer_in_top_band(height: float) -> bool:
+    """Курсор в верхней полосе экрана, где живёт менюбар."""
+    loc = NSEvent.mouseLocation()
+    x = float(loc.x)
+    y = float(loc.y)
+    for screen in NSScreen.screens():
+        frame = screen.frame()
+        left = float(frame.origin.x)
+        bottom = float(frame.origin.y)
+        right = left + float(frame.size.width)
+        top = bottom + float(frame.size.height)
+        if left <= x < right and bottom <= y < top:
+            return y >= top - height
+    return False
+
+
 class ClockController(NSObject):
     window = None
     label = None
+    navbar_hover = False
+    mouse_monitor = None
 
     def applicationDidFinishLaunching_(self, _notification) -> None:
         label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 80, 22))
@@ -160,7 +237,27 @@ class ClockController(NSObject):
             None,
             True,
         )
+        self.navbar_hover = False
+
+        def on_mouse(event):
+            self.mouseMoved_(event)
+
+        self._on_mouse = on_mouse
+        self.mouse_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskMouseMoved
+            | NSEventMaskLeftMouseDragged
+            | NSEventMaskRightMouseDragged,
+            on_mouse,
+        )
         self.refreshClock()
+
+    def mouseMoved_(self, _event) -> None:
+        # ховер кромки прячет часы сразу, не дожидаясь тика и анимации менюбара
+        if self.window is None or not bool(self.window.isVisible()):
+            return
+        if pointer_in_top_band(HOVER_EDGE):
+            self.navbar_hover = True
+            self.window.orderOut_(None)
 
     def spaceChanged_(self, _note) -> None:
         # список окон обновляется с лагом после свайпа — добиваем отложенно
@@ -181,7 +278,15 @@ class ClockController(NSObject):
         if self.label is None or self.window is None:
             return
 
+        summon = pointer_in_top_band(HOVER_EDGE)
+        in_bar = pointer_in_top_band(MENU_BAR_HEIGHT)
         sys_clock = system_clock_visible()
+        if summon or sys_clock:
+            self.navbar_hover = True
+        elif not in_bar:
+            self.navbar_hover = False
+        sys_clock = sys_clock or bool(self.navbar_hover)
+
         if os.environ.get("CORNER_DEBUG"):
             from time import strftime
 
